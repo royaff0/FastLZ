@@ -25,6 +25,13 @@
 
 #include <stdint.h>
 
+#ifdef DEBUG
+#include <stdio.h>
+#define debug_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#define debug_printf(fmt, ...)
+#endif
+
 /*
  * Always check for bound when decompressing.
  * Generally it is best to leave it defined.
@@ -192,6 +199,10 @@ static void flz_copy256(void* dest, const void* src) {
 #define MAX_L2_DISTANCE 8191
 #define MAX_FARDISTANCE (65535 + MAX_L2_DISTANCE - 1)
 
+#define MAX_L0_COPY 128
+#define MAX_L0_LEN 128
+#define MAX_L0_DISTANCE 256
+
 #define HASH_LOG 14
 #define HASH_SIZE (1 << HASH_LOG)
 #define HASH_MASK (HASH_SIZE - 1)
@@ -328,6 +339,121 @@ int fastlz1_compress(const void* input, int length, void* output) {
 
   uint32_t copy = (uint8_t*)input + length - anchor;
   op = flz_finalize(copy, anchor, op);
+
+  return op - (uint8_t*)output;
+}
+
+static uint8_t* flz0_finalize(uint32_t runs, const uint8_t* src, uint8_t* dest) {
+  debug_printf("flz0_finalize \t(%lu)\r\n", runs);
+
+  while (runs >= MAX_L0_COPY) {
+    *dest++ = MAX_L0_COPY - 1;
+    flz_smallcopy(dest, src, MAX_L0_COPY);
+    src += MAX_L0_COPY;
+    dest += MAX_L0_COPY;
+    runs -= MAX_L0_COPY;
+  }
+  if (runs > 0) {
+    *dest++ = runs - 1;
+    flz_smallcopy(dest, src, runs);
+    dest += runs;
+  }
+  return dest;
+}
+
+static uint8_t* flz0_literals(uint32_t runs, const uint8_t* src, uint8_t* dest) {  
+  debug_printf("flz0_literals \t(%lu)\r\n", runs);
+
+  while (runs >= MAX_L0_COPY) {
+    *dest++ = MAX_L0_COPY - 1;
+    flz_copy256(dest, src);
+    src += MAX_L0_COPY;
+    dest += MAX_L0_COPY;
+    runs -= MAX_L0_COPY;
+  }
+  if (runs > 0) {
+    *dest++ = runs - 1;
+    flz_copy64(dest, src, runs);
+    dest += runs;
+  }
+  return dest;
+}
+
+static uint8_t* flz0_match(uint32_t len, uint32_t distance, uint8_t* op) {
+  debug_printf("flz0_match \t(%lu,\t%lu)\r\n", len, distance);
+
+  --distance;
+  if (FASTLZ_UNLIKELY(len > MAX_L0_LEN - 1))
+    while (len > MAX_L0_LEN - 1) {
+      *op++ = 0x80 + (MAX_L0_LEN - 1);
+      *op++ = (distance & 255);
+      len -= MAX_L0_LEN - 1;
+    }
+
+  *op++ = ((len & 0x7F) | 0x80);
+  *op++ = (distance & 255);
+
+  return op;
+}
+
+int fastlz0_compress(const void* input, int length, void* output) {
+  const uint8_t* ip = (const uint8_t*)input;
+  const uint8_t* ip_start = ip;
+  const uint8_t* ip_bound = ip + length - 4; /* because readU32 */
+  const uint8_t* ip_limit = ip + length - 12 - 1;
+  uint8_t* op = (uint8_t*)output;
+
+  uint32_t htab[HASH_SIZE];
+  uint32_t seq, hash;
+
+  /* initializes hash table */
+  for (hash = 0; hash < HASH_SIZE; ++hash) htab[hash] = 0;
+
+  /* we start with literal copy */
+  const uint8_t* anchor = ip;
+  ip += 2;
+
+  /* main loop */
+  while (FASTLZ_LIKELY(ip < ip_limit)) {
+    const uint8_t* ref;
+    uint32_t distance, cmp;
+
+    /* find potential match */
+    do {
+      seq = flz_readu32(ip) & 0xffffff;
+      hash = flz_hash(seq);
+      ref = ip_start + htab[hash];
+      htab[hash] = ip - ip_start;
+      distance = ip - ref;
+      cmp = FASTLZ_LIKELY(distance < MAX_L0_DISTANCE) ? flz_readu32(ref) & 0xffffff : 0x1000000;
+      if (FASTLZ_UNLIKELY(ip >= ip_limit)) break;
+      ++ip;
+    } while (seq != cmp);
+
+    if (FASTLZ_UNLIKELY(ip >= ip_limit)) break;
+    --ip;
+
+    if (FASTLZ_LIKELY(ip > anchor)) {
+      op = flz0_literals(ip - anchor, anchor, op);
+    }
+
+    uint32_t len = flz_cmp(ref + 3, ip + 3, ip_bound);
+    op = flz0_match(len, distance, op);
+
+    /* update the hash at match boundary */
+    ip += len;
+    seq = flz_readu32(ip);
+    hash = flz_hash(seq & 0xffffff);
+    htab[hash] = ip++ - ip_start;
+    seq >>= 8;
+    hash = flz_hash(seq);
+    htab[hash] = ip++ - ip_start;
+
+    anchor = ip;
+  }
+
+  uint32_t copy = (uint8_t*)input + length - anchor;
+  op = flz0_finalize(copy, anchor, op);
 
   return op - (uint8_t*)output;
 }
@@ -551,8 +677,24 @@ int fastlz_decompress(const void* input, int length, void* output, int maxout) {
 }
 
 int fastlz_compress_level(int level, const void* input, int length, void* output) {
+  if (level == 0) return fastlz0_compress(input, length, output);
   if (level == 1) return fastlz1_compress(input, length, output);
   if (level == 2) return fastlz2_compress(input, length, output);
 
   return 0;
 }
+
+#ifdef DEBUG
+int main(void) {
+  unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4};
+  unsigned char output[1024];
+
+  int res = fastlz0_compress(&input[0], sizeof(input), &output[0]);
+
+  debug_printf("\r\n");
+  debug_printf("input size = %lu, output size = %d\r\n", sizeof(input), res);
+  for (size_t i = 0; i < res; i++) {
+    debug_printf("%02X ", output[i]);
+  }
+}
+#endif

@@ -117,6 +117,7 @@ void usage(void) {
   printf("Usage: 6pack [options]  input-file  output-file\n");
   printf("\n");
   printf("Options:\n");
+  printf("  -0    compress small memory\n");
   printf("  -1    compress faster\n");
   printf("  -2    compress better\n");
   printf("  -v    show program version\n");
@@ -524,6 +525,10 @@ int main(int argc, char** argv) {
     }
 
     /* compression level */
+    if (!strcmp(argument, "-0")) {
+      compress_level = 0;
+      continue;
+    }
     if (!strcmp(argument, "-1") || !strcmp(argument, "--fastest")) {
       compress_level = 1;
       continue;
