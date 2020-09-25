@@ -25,6 +25,8 @@
 
 #include <stdint.h>
 
+// #define DEBUG
+
 #ifdef DEBUG
 #include <stdio.h>
 #define debug_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
@@ -343,6 +345,45 @@ int fastlz1_compress(const void* input, int length, void* output) {
   return op - (uint8_t*)output;
 }
 
+int fastlz1_decompress(const void* input, int length, void* output, int maxout) {
+  const uint8_t* ip = (const uint8_t*)input;
+  const uint8_t* ip_limit = ip + length;
+  const uint8_t* ip_bound = ip_limit - 2;
+  uint8_t* op = (uint8_t*)output;
+  uint8_t* op_limit = op + maxout;
+  uint32_t ctrl = (*ip++) & 31;
+
+  while (1) {
+    if (ctrl >= 32) {
+      uint32_t len = (ctrl >> 5) - 1;
+      uint32_t ofs = (ctrl & 31) << 8;
+      const uint8_t* ref = op - ofs - 1;
+      if (len == 7 - 1) {
+        FASTLZ_BOUND_CHECK(ip <= ip_bound);
+        len += *ip++;
+      }
+      ref -= *ip++;
+      len += 3;
+      FASTLZ_BOUND_CHECK(op + len <= op_limit);
+      FASTLZ_BOUND_CHECK(ref >= (uint8_t*)output);
+      fastlz_memmove(op, ref, len);
+      op += len;
+    } else {
+      ctrl++;
+      FASTLZ_BOUND_CHECK(op + ctrl <= op_limit);
+      FASTLZ_BOUND_CHECK(ip + ctrl <= ip_limit);
+      fastlz_memcpy(op, ip, ctrl);
+      ip += ctrl;
+      op += ctrl;
+    }
+
+    if (FASTLZ_UNLIKELY(ip > ip_bound)) break;
+    ctrl = *ip++;
+  }
+
+  return op - (uint8_t*)output;
+}
+
 static uint8_t* flz0_finalize(uint32_t runs, const uint8_t* src, uint8_t* dest) {
   debug_printf("flz0_finalize \t(%lu)\r\n", runs);
 
@@ -387,10 +428,10 @@ static uint8_t* flz0_match(uint32_t len, uint32_t distance, uint8_t* op) {
     while (len > MAX_L0_LEN - 1) {
       *op++ = 0x80 + (MAX_L0_LEN - 1);
       *op++ = (distance & 255);
-      len -= MAX_L0_LEN - 1;
+      len -= MAX_L0_LEN - 1 + 3;
     }
 
-  *op++ = ((len & 0x7F) | 0x80);
+  *op++ = (((len) & 0x7F) | 0x80) - 1;
   *op++ = (distance & 255);
 
   return op;
@@ -458,31 +499,28 @@ int fastlz0_compress(const void* input, int length, void* output) {
   return op - (uint8_t*)output;
 }
 
-int fastlz1_decompress(const void* input, int length, void* output, int maxout) {
+int fastlz0_decompress(const void* input, int length, void* output, int maxout) {
   const uint8_t* ip = (const uint8_t*)input;
   const uint8_t* ip_limit = ip + length;
   const uint8_t* ip_bound = ip_limit - 2;
   uint8_t* op = (uint8_t*)output;
   uint8_t* op_limit = op + maxout;
-  uint32_t ctrl = (*ip++) & 31;
+  uint32_t ctrl = (*ip++) & 127;
 
   while (1) {
-    if (ctrl >= 32) {
-      uint32_t len = (ctrl >> 5) - 1;
-      uint32_t ofs = (ctrl & 31) << 8;
+    if(ctrl >= 128) {
+      uint32_t len = (ctrl & 0x7F) + 3;
+      uint32_t ofs = *ip++;
       const uint8_t* ref = op - ofs - 1;
-      if (len == 7 - 1) {
-        FASTLZ_BOUND_CHECK(ip <= ip_bound);
-        len += *ip++;
-      }
-      ref -= *ip++;
-      len += 3;
+
+      debug_printf("d move %d\r\n", len);
       FASTLZ_BOUND_CHECK(op + len <= op_limit);
       FASTLZ_BOUND_CHECK(ref >= (uint8_t*)output);
       fastlz_memmove(op, ref, len);
       op += len;
     } else {
       ctrl++;
+      debug_printf("d cope %d\r\n", ctrl);
       FASTLZ_BOUND_CHECK(op + ctrl <= op_limit);
       FASTLZ_BOUND_CHECK(ip + ctrl <= ip_limit);
       fastlz_memcpy(op, ip, ctrl);
@@ -493,7 +531,7 @@ int fastlz1_decompress(const void* input, int length, void* output, int maxout) 
     if (FASTLZ_UNLIKELY(ip > ip_bound)) break;
     ctrl = *ip++;
   }
-
+  
   return op - (uint8_t*)output;
 }
 
@@ -686,8 +724,13 @@ int fastlz_compress_level(int level, const void* input, int length, void* output
 
 #ifdef DEBUG
 int main(void) {
-  unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4};
-  unsigned char output[1024];
+    unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,
+    0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC};
+
+  // unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4};
+  // unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4};
+  unsigned char output[10240];
+  unsigned char dec[sizeof(input)];
 
   int res = fastlz0_compress(&input[0], sizeof(input), &output[0]);
 
@@ -696,5 +739,19 @@ int main(void) {
   for (size_t i = 0; i < res; i++) {
     debug_printf("%02X ", output[i]);
   }
+
+  debug_printf("\r\n");
+  res = fastlz0_decompress(&output[0], res, &dec[0], sizeof(input));
+
+  debug_printf("decode size = %lu\r\n", res);
+
+  for (size_t i = 0; i < sizeof(input); i++) {
+    debug_printf("%d ", input[i]);
+  }
+  debug_printf("\r\n");
+  for (size_t i = 0; i < res; i++) {
+    debug_printf("%d ", dec[i]);
+  }
+
 }
 #endif
