@@ -29,9 +29,14 @@
 
 #ifdef DEBUG
 #include <stdio.h>
+
 #define debug_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#define FASTLZ0_BOUND_CHECK(cond) \
+  if (FASTLZ_UNLIKELY(!(cond))) debug_printf("FASTLZ0_BOUND_CHECK\r\n");
+
 #else
 #define debug_printf(fmt, ...)
+#define FASTLZ0_BOUND_CHECK FASTLZ_BOUND_CHECK
 #endif
 
 /*
@@ -202,7 +207,7 @@ static void flz_copy256(void* dest, const void* src) {
 #define MAX_FARDISTANCE (65535 + MAX_L2_DISTANCE - 1)
 
 #define MAX_L0_COPY 128
-#define MAX_L0_LEN 128
+#define MAX_L0_LEN 130
 #define MAX_L0_DISTANCE 256
 
 #define HASH_LOG 14
@@ -423,15 +428,22 @@ static uint8_t* flz0_literals(uint32_t runs, const uint8_t* src, uint8_t* dest) 
 static uint8_t* flz0_match(uint32_t len, uint32_t distance, uint8_t* op) {
   debug_printf("flz0_match \t(%lu,\t%lu)\r\n", len, distance);
 
+  // uint8_t* opb = op;
+  // if (0x00007ffeefbfb5aa == opb) {
+  //   debug_printf("");
+  // }
+  
   --distance;
-  if (FASTLZ_UNLIKELY(len > MAX_L0_LEN - 1))
-    while (len > MAX_L0_LEN - 1) {
-      *op++ = 0x80 + (MAX_L0_LEN - 1);
+  if (FASTLZ_UNLIKELY(len > MAX_L0_LEN - 2))
+    while (len > MAX_L0_LEN - 2) {
+      *op++ = (0x80 + (MAX_L0_LEN - 3 - 2));
       *op++ = (distance & 255);
-      len -= MAX_L0_LEN - 1 + 3;
+      len -= MAX_L0_LEN - 2;
+      
+      debug_printf("  match \t(%lu,\t%lu)\r\n", len, distance);
     }
 
-  *op++ = (((len) & 0x7F) | 0x80) - 1;
+  *op++ = (0x80 + (len & 0x7F) - 1);
   *op++ = (distance & 255);
 
   return op;
@@ -514,15 +526,15 @@ int fastlz0_decompress(const void* input, int length, void* output, int maxout) 
       const uint8_t* ref = op - ofs - 1;
 
       debug_printf("d move %d\r\n", len);
-      FASTLZ_BOUND_CHECK(op + len <= op_limit);
-      FASTLZ_BOUND_CHECK(ref >= (uint8_t*)output);
+      FASTLZ0_BOUND_CHECK(op + len <= op_limit);
+      FASTLZ0_BOUND_CHECK(ref >= (uint8_t*)output);
       fastlz_memmove(op, ref, len);
       op += len;
     } else {
       ctrl++;
       debug_printf("d cope %d\r\n", ctrl);
-      FASTLZ_BOUND_CHECK(op + ctrl <= op_limit);
-      FASTLZ_BOUND_CHECK(ip + ctrl <= ip_limit);
+      FASTLZ0_BOUND_CHECK(op + ctrl <= op_limit);
+      FASTLZ0_BOUND_CHECK(ip + ctrl <= ip_limit);
       fastlz_memcpy(op, ip, ctrl);
       ip += ctrl;
       op += ctrl;
@@ -723,12 +735,81 @@ int fastlz_compress_level(int level, const void* input, int length, void* output
 }
 
 #ifdef DEBUG
+void print_hex(unsigned char *data, size_t size) {
+  for (size_t i = 0; i < size; i++) {
+    debug_printf("%02X ", data[i]);
+  }
+  debug_printf("\r\n");
+}
+#if 0
 int main(void) {
-    unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,
+  FILE *fp;
+  unsigned char readdata[7500];
+
+  /* opening file for reading */
+  fp = fopen("data.bin" , "r");
+  if(fp == NULL) {
+    perror("Error opening file");
+    return(-1);
+  }
+  if( fgets (readdata, 7500, fp)!=NULL ) {
+    debug_printf("read file ok\r\n");
+    /* writing content to stdout */
+    // puts(str);
+  }
+  fclose(fp);
+
+  unsigned char compress[10240];
+  unsigned char decompress[10000];
+
+  // unsigned char * input = &readdata[5600];
+  // size_t input_size = 336;
+
+  unsigned char * input = &readdata[0];
+  size_t input_size = 7500;
+
+  int res = fastlz0_compress(input, input_size, &compress[0]);
+
+  debug_printf("compress output size = %d\r\n", res);
+
+  for (size_t i = 0; i < res; i++) {
+    debug_printf("%02X ", compress[i]);
+  }
+  debug_printf("\r\n");
+
+  res = fastlz0_decompress(&compress[0], res, &decompress[0], sizeof(decompress));
+
+  debug_printf("decompress output size = %d\r\n", res);
+
+  for (size_t i = 0; i < input_size; i++) {
+    if(input[i] != decompress[i]) {
+      debug_printf("data not match at %d: [%02X->%02X]\r\n", i, input[i], decompress[i]);
+      break;
+    }
+    if (input_size == i+1)
+    {
+      debug_printf("data match!\r\n");
+    }
+    
+  }
+
+  // print_hex(&input[0], input_size);
+  // print_hex(&decompress[0], input_size);
+  
+}
+#endif
+#if 0
+
+int main(void) {
+  unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,
     0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC,0xAA, 0xBB, 0xCC};
 
   // unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4};
   // unsigned char input[] = {1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4};
+
+  // unsigned char input[135];
+  // memset(&input[0], 'a', sizeof(input));
+
   unsigned char output[10240];
   unsigned char dec[sizeof(input)];
 
@@ -755,3 +836,5 @@ int main(void) {
 
 }
 #endif
+#endif
+
