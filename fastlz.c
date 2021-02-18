@@ -25,7 +25,7 @@
 
 #include <stdint.h>
 
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #include <stdio.h>
@@ -741,32 +741,39 @@ void print_hex(unsigned char *data, size_t size) {
   }
   debug_printf("\r\n");
 }
-#if 0
+
+#if 1
+#define F_SIZE  17000
 int main(void) {
   FILE *fp;
-  unsigned char readdata[7500];
+  unsigned char readdata[F_SIZE];
+  memset(&readdata[0], F_SIZE, 0);
 
   /* opening file for reading */
   fp = fopen("data.bin" , "r");
   if(fp == NULL) {
-    perror("Error opening file");
+    perror("Error opening file: data.bin");
     return(-1);
   }
-  if( fgets (readdata, 7500, fp)!=NULL ) {
+  if( fgets (&readdata[0], F_SIZE, fp)!=NULL ) {
     debug_printf("read file ok\r\n");
     /* writing content to stdout */
     // puts(str);
   }
   fclose(fp);
 
+
+  print_hex(&readdata[16900], F_SIZE-16900);
+  return 0;
+
   unsigned char compress[10240];
   unsigned char decompress[10000];
 
-  // unsigned char * input = &readdata[5600];
-  // size_t input_size = 336;
+  // unsigned char * input = &readdata[16500];
+  // size_t input_size = 500;
 
   unsigned char * input = &readdata[0];
-  size_t input_size = 7500;
+  size_t input_size = F_SIZE;
 
   int res = fastlz0_compress(input, input_size, &compress[0]);
 
@@ -790,12 +797,11 @@ int main(void) {
     {
       debug_printf("data match!\r\n");
     }
-    
   }
 
-  // print_hex(&input[0], input_size);
-  // print_hex(&decompress[0], input_size);
-  
+  print_hex(&input[15800], input_size-15800);
+  print_hex(&decompress[15800], input_size-15800);
+  return 0;
 }
 #endif
 #if 0
