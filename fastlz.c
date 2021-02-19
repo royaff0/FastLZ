@@ -25,7 +25,7 @@
 
 #include <stdint.h>
 
-#define DEBUG
+// #define DEBUG
 
 #ifdef DEBUG
 #include <stdio.h>
@@ -411,15 +411,22 @@ static uint8_t* flz0_literals(uint32_t runs, const uint8_t* src, uint8_t* dest) 
   debug_printf("flz0_literals \t(%lu)\r\n", runs);
 
   while (runs >= MAX_L0_COPY) {
+    debug_printf("  --flz_copy256  %d\r\n", runs);
+
     *dest++ = MAX_L0_COPY - 1;
-    flz_copy256(dest, src);
+    // flz_copy256(dest, src);
+    memcpy(dest, src, MAX_L0_COPY);
+
     src += MAX_L0_COPY;
     dest += MAX_L0_COPY;
     runs -= MAX_L0_COPY;
   }
   if (runs > 0) {
+    debug_printf("  --flz_copy64  %d\r\n", runs);
     *dest++ = runs - 1;
-    flz_copy64(dest, src, runs);
+    // flz_copy64(dest, src, runs);
+    memcpy(dest, src, runs);
+
     dest += runs;
   }
   return dest;
@@ -743,7 +750,7 @@ void print_hex(unsigned char *data, size_t size) {
 }
 
 #if 1
-#define F_SIZE  17000
+#define F_SIZE  7500
 int main(void) {
   FILE *fp;
   unsigned char readdata[F_SIZE];
@@ -755,22 +762,21 @@ int main(void) {
     perror("Error opening file: data.bin");
     return(-1);
   }
-  if( fgets (&readdata[0], F_SIZE, fp)!=NULL ) {
+  
+  if(fread (&readdata[0], sizeof(char), F_SIZE, fp) == F_SIZE) {
     debug_printf("read file ok\r\n");
-    /* writing content to stdout */
-    // puts(str);
   }
+  
   fclose(fp);
 
-
-  print_hex(&readdata[16900], F_SIZE-16900);
-  return 0;
+  // print_hex(&readdata[16900], F_SIZE-16900);
+  // return 0;
 
   unsigned char compress[10240];
   unsigned char decompress[10000];
 
-  // unsigned char * input = &readdata[16500];
-  // size_t input_size = 500;
+  // unsigned char * input = &readdata[400];
+  // size_t input_size = 300;
 
   unsigned char * input = &readdata[0];
   size_t input_size = F_SIZE;
@@ -779,10 +785,7 @@ int main(void) {
 
   debug_printf("compress output size = %d\r\n", res);
 
-  for (size_t i = 0; i < res; i++) {
-    debug_printf("%02X ", compress[i]);
-  }
-  debug_printf("\r\n");
+  print_hex(&compress[0], res);
 
   res = fastlz0_decompress(&compress[0], res, &decompress[0], sizeof(decompress));
 
@@ -791,6 +794,14 @@ int main(void) {
   for (size_t i = 0; i < input_size; i++) {
     if(input[i] != decompress[i]) {
       debug_printf("data not match at %d: [%02X->%02X]\r\n", i, input[i], decompress[i]);
+
+
+      // int offset = 0;
+      // debug_printf(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n");
+      // print_hex(&input[offset], input_size-offset);
+      // debug_printf(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n");
+      // print_hex(&decompress[offset], input_size-offset);
+
       break;
     }
     if (input_size == i+1)
@@ -799,8 +810,6 @@ int main(void) {
     }
   }
 
-  print_hex(&input[15800], input_size-15800);
-  print_hex(&decompress[15800], input_size-15800);
   return 0;
 }
 #endif
